@@ -35,58 +35,76 @@ namespace FBReader.AppServices.CatalogReaders.Readers
     {
         private readonly CatalogModel _catalogModel;
         private readonly ISdCardStorage _sdCardStorage;
-        private readonly string[] _supportedFileTypes = new []{ ".epub", ".fb2" };
+        private Stack<string> _stack;
 
         public SdCardCatalogReader(ISdCardStorage sdCardStorage, CatalogModel catalogModel)
         {
             _sdCardStorage = sdCardStorage;
             _catalogModel = catalogModel;
+            _stack = new Stack<string>();
         }
 
         public async Task<IEnumerable<CatalogItemModel>> ReadAsync()
         {
             try
             {
-                var files = await _sdCardStorage.GetFilesAsync(_supportedFileTypes);
-                
-                //extract book summary
-                var items = new List<CatalogBookItemModel>();
-
-                foreach (var file in files)
-                {
-                    var stream = await file.OpenForReadAsync();
-
-// ReSharper disable PossibleNullReferenceException
-                    var type = Path.GetExtension(file.Path).TrimStart('.').ToLower();
-// ReSharper restore PossibleNullReferenceException
-
-
-                    BookSummary preview;
-                    try
+                return await _sdCardStorage.GetFolderAsync(_stack.Any() ? _stack.First() : null).ContinueWith(folderTask =>
                     {
-                        var parser = BookFactory.GetPreviewGenerator(type, file.Name, stream);
-                        preview = parser.GetBookPreview();
-                    }
-                    catch (Exception e)
-                    {
-                        //can't parse book
-                        Debugger.Break();
-                        continue;
-                    }
-                    items.Add(new CatalogBookItemModel
-                        {
-                            Title = preview.Title,
-                            Description = preview.Description,
-                            Author = preview.AuthorName,
-                            Links = new List<BookDownloadLinkModel>
-                                        {
-                                            new BookDownloadLinkModel {Type = '.' + type, Url = file.Path}
-                                        },
-                            Id = file.Path
-                        });
-                }
+                        var folder = folderTask.Result;
+                        var foldersTask = folder.GetFoldersAsync().ContinueWith(task =>
+                            task.Result.Select(i => new CatalogItemModel
+                            {
+                                OpdsUrl = i.Path,
+                                Title = i.Name,
+                            })
+                        );
 
-                return items.OrderBy(i => i.Title);
+                        var filesTask = folder.GetFilesAsync().ContinueWith((task) =>
+                            {
+                                List<Task<CatalogItemModel>> tasks = new List<Task<CatalogItemModel>>();
+                                foreach (var file in task.Result)
+                                {
+                                    var ext = Path.GetExtension(file.Path);
+                                    if (ext != null)
+                                    {
+                                        var type = ext.TrimStart('.').ToLower();
+                                        tasks.Add(file.OpenForReadAsync().ContinueWith(fileTask =>
+                                            {
+                                                var stream = fileTask.Result;
+                                                BookSummary preview;
+                                                try
+                                                {
+                                                    var parser = BookFactory.GetPreviewGenerator(type, file.Name, stream);
+                                                    preview = parser.GetBookPreview();
+                                                }
+                                                catch (Exception)
+                                                {
+                                                    //can't parse book
+                                                    Debugger.Break();
+                                                    return null;
+                                                }
+                                                return (CatalogItemModel) new CatalogBookItemModel
+                                                {
+                                                    Title = preview.Title,
+                                                    Description = preview.Description,
+                                                    Author = preview.AuthorName,
+                                                    Links = new List<BookDownloadLinkModel>
+                                                {
+                                                    new BookDownloadLinkModel {Type = '.' + type, Url = file.Path}
+                                                },
+                                                    OpdsUrl = file.Path,
+                                                    Id = file.Path
+                                                };
+                                            }));
+                                    }
+                                }
+
+                                return Task.WhenAll(tasks.ToArray()).Result.Where(i => i != null);
+                            });
+
+                        Task<IEnumerable<CatalogItemModel>>[] allTasks = { foldersTask, filesTask };
+                        return Task.WhenAll(allTasks).Result.SelectMany(j => j);
+                    });
             }
             catch (SdCardNotSupportedException)
             {
@@ -106,7 +124,7 @@ namespace FBReader.AppServices.CatalogReaders.Readers
         {
             get
             {
-                return false;
+                return _stack.Any();
             }
         }
 
@@ -125,12 +143,16 @@ namespace FBReader.AppServices.CatalogReaders.Readers
 
         public void GoTo(CatalogItemModel model)
         {
-            throw new NotSupportedException();
+            _stack.Push(model.OpdsUrl);
         }
 
         public void GoBack()
         {
-            throw new NotSupportedException();
+            if (!_stack.Any())
+            {
+                throw new ReadCatalogException("Unable go back");
+            }
+            _stack.Pop();
         }
 
         public void Refresh()

@@ -1,0 +1,7 @@
+**/obj/
+**/bin/
+.*.swp
+*.suo
+*.csproj.user
+packages/
+

@@ -27,5 +27,6 @@ namespace FBReader.PhoneServices
     {
         Task<bool> GetIsAvailableAsync();
         Task<IEnumerable<ExternalStorageFile>> GetFilesAsync(params string[] extensions);
+        Task<ExternalStorageFolder> GetFolderAsync(string path);
     }
 }

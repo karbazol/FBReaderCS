@@ -31,39 +31,44 @@ namespace FBReader.PhoneServices
 
         public async Task<bool> GetIsAvailableAsync()
         {
-            _sdCardStorage = (await ExternalStorage.GetExternalStorageDevicesAsync()).FirstOrDefault();
-            return _sdCardStorage != null;
+            return null != (await ExternalStorage.GetExternalStorageDevicesAsync()).FirstOrDefault();
         }
 
-        public async Task<IEnumerable<ExternalStorageFile>> GetFilesAsync(params string[] extensions)
+        private ExternalStorageDevice GetDevice()
         {
             if (_sdCardStorage == null)
             {
-                _sdCardStorage = (await ExternalStorage.GetExternalStorageDevicesAsync()).FirstOrDefault();
+                _sdCardStorage = ExternalStorage.GetExternalStorageDevicesAsync().Result.FirstOrDefault();
             }
 
             //suppose SD-card is null
             if (_sdCardStorage == null)
             {
-                throw new SdCardNotSupportedException();    
+                throw new SdCardNotSupportedException();
             }
-            
-            //read all files recursively
-            var files = new List<ExternalStorageFile>();
-            await GetFilesAsync(_sdCardStorage.RootFolder, files);
-            return files;
+
+            return _sdCardStorage;
         }
 
-        public async Task GetFilesAsync(ExternalStorageFolder folder, List<ExternalStorageFile> files)
+        public async Task<IEnumerable<ExternalStorageFile>> GetFilesAsync(params string[] extensions)
         {
-            var subFolders = await folder.GetFoldersAsync();
-            foreach (var subFolder in subFolders)
-            {
-                await GetFilesAsync(subFolder, files);
-            }
-            
+            //read all files recursively
+            return await GetFilesAsync(GetDevice().RootFolder);
+        }
 
-            files.AddRange(await folder.GetFilesAsync());
+        public async Task<IEnumerable<ExternalStorageFile>> GetFilesAsync(ExternalStorageFolder folder)
+        {
+            return Enumerable.Union(await folder.GetFilesAsync(),
+                (await folder.GetFoldersAsync()).SelectMany(i => GetFilesAsync(i).Result));
+        }
+
+        public async Task<ExternalStorageFolder> GetFolderAsync(string path)
+        {
+            if (path == null)
+            {
+                return GetDevice().RootFolder;
+            }
+            return await GetDevice().GetFolderAsync(path);
         }
     }
 }
